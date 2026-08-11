@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>คณิตคิดเลขเร็ว AR (Kids Edition)</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Mali:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+
+    <style>
+        * {
+            font-family: 'Mali', cursive, sans-serif;
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background: #1a0b2e;
+        }
+
+        /* Mirror video stream */
+        .video-mirror {
+            transform: scaleX(-1);
+            -webkit-transform: scaleX(-1);
+        }
+
+        /* 3D Jelly Button Styling */
+        .jelly-btn {
+            border-radius: 30px;
+            border: 4px solid #ffffff;
+            box-shadow: 0 8px 0 rgba(0, 0, 0, 0.2), 0 12px 20px rgba(0, 0, 0, 0.15);
+            transition: transform 0.1s ease, filter 0.1s ease;
+        }
+        .jelly-btn:active {
+            transform: translateY(4px);
+            box-shadow: 0 4px 0 rgba(0, 0, 0, 0.2), 0 6px 10px rgba(0, 0, 0, 0.15);
+        }
+
+        /* Hover active state simulated by AR cursor */
+        .ar-hovered {
+            filter: brightness(1.2) saturate(1.3);
+            transform: scale(1.05);
+            box-shadow: 0 0 25px rgba(255, 215, 0, 0.8), 0 8px 0 rgba(0, 0, 0, 0.2) !important;
+        }
+
+        /* Animations for feedback */
+        @keyframes popCorrect {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.25) rotate(5deg); background-color: #22c55e !important; }
+            100% { transform: scale(1); }
+        }
+        .animate-pop {
+            animation: popCorrect 0.5s ease-in-out;
+        }
+
+        @keyframes shakeWrong {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-10px); background-color: #ef4444 !important; }
+            40%, 80% { transform: translateX(10px); }
+        }
+        .animate-shake {
+            animation: shakeWrong 0.4s ease-in-out;
+        }
+
+        /* Confetti particle styling */
+        .confetti {
+            position: absolute;
+            z-index: 50;
+            font-size: 24px;
+            pointer-events: none;
+            animation: fallConfetti linear forwards;
+        }
+        @keyframes fallConfetti {
+            0% { transform: translateY(-50px) rotate(0deg); opacity: 1; }
+            100% { transform: translateY(105vh) rotate(720deg); opacity: 0; }
+        }
+
+        /* Star Sparkle */
+        .sparkle {
+            position: absolute;
+            pointer-events: none;
+            animation: sparkleAnim 0.6s ease-out forwards;
+        }
+        @keyframes sparkleAnim {
+            0% { transform: scale(0) translate(0, 0); opacity: 1; }
+            100% { transform: scale(1.5) translate(var(--dx), var(--dy)); opacity: 0; }
+        }
+    </style>
+</head>
+<body class="relative w-full h-full flex flex-col items-center justify-center overflow-hidden">
+
+    <div id="webcam-container" class="absolute inset-0 w-full h-full overflow-hidden z-0 bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900">
+        <video id="webcam" class="absolute inset-0 w-full h-full object-cover video-mirror opacity-60" autoplay playsinline muted></video>
+        <canvas id="output-canvas" class="absolute inset-0 w-full h-full object-cover video-mirror pointer-events-none"></canvas>
+    </div>
+
+    <div id="ar-pointer" class="absolute w-12 h-12 flex items-center justify-center z-40 pointer-events-none transition-all duration-75" style="display: none; transform: translate(-50%, -50%);">
+        <div class="relative w-full h-full flex items-center justify-center">
+            <!-- Progress Ring SVG for Hover-to-Click -->
+            <svg class="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 36 36">
+                <path class="text-amber-300/40" stroke-width="4" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                <path id="progress-ring-path" class="text-amber-400 transition-all duration-75" stroke-dasharray="100, 100" stroke-width="4" stroke-linecap="round" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+            </svg>
+            <span class="text-3xl filter drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">⭐</span>
+        </div>
+    </div>
+
+    <div id="screen-loading" class="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-md p-6 text-white text-center">
+        <div class="relative w-24 h-24 mb-6">
+            <div class="absolute inset-0 border-8 border-pink-500/30 rounded-full animate-ping"></div>
+            <div class="absolute inset-0 border-8 border-t-amber-400 border-r-pink-500 border-b-cyan-400 border-l-purple-500 rounded-full animate-spin"></div>
+            <div class="absolute inset-0 flex items-center justify-center text-4xl">🧮</div>
+        </div>
+        <h1 class="text-3xl md:text-4xl font-bold mb-3 text-amber-300 drop-shadow-lg">กำลังเตรียมความพร้อม AR...</h1>
+        <p class="text-lg md:text-xl text-pink-200 max-w-md">โปรดอนุญาตการใช้กล้องเว็บแคมเพื่อเปิดประสบการณ์ความสนุกสุดล้ำให้น้องๆ ครับ!</p>
+    </div>
+
+    <div id="screen-start" class="absolute inset-0 z-20 flex flex-col items-center justify-center p-6 text-center bg-black/40 backdrop-blur-[2px]" style="display: none;">
+        <div class="max-w-xl w-full bg-white/10 backdrop-blur-md p-8 rounded-[40px] border-4 border-white/50 shadow-2xl flex flex-col items-center">
+            <div class="text-6xl md:text-7xl mb-4 animate-bounce">🦄✨</div>
+            <h1 class="text-4xl md:text-5xl font-extrabold text-amber-300 drop-shadow-[0_4px_8px_rgba(0,0,0,0.6)] mb-4">
+                คณิตคิดเลขเร็ว AR
+            </h1>
+            <p class="text-lg md:text-xl text-white font-semibold mb-8 drop-shadow">
+                ใช้นิ้วชี้ของคุณเป็นดาววิเศษ เล็งและค้างไว้บนปุ่มคำตอบเพื่อเลือกคำตอบ! 🎯
+            </p>
+            <button id="btn-start" class="hand-interact jelly-btn px-10 py-5 bg-gradient-to-r from-pink-500 to-amber-400 text-white text-2xl md:text-3xl font-bold tracking-wide hover:brightness-110 cursor-pointer shadow-xl">
+                🚀 เริ่มเล่นเกมกันเลย!
+            </button>
+        </div>
+    </div>
+
+    <div id="screen-game" class="absolute inset-0 z-20 flex flex-col justify-between p-4 md:p-6 max-h-[100vh] overflow-hidden" style="display: none;">
+        
+        <!-- Top Status Bar -->
+        <div class="w-full max-w-4xl mx-auto flex justify-between items-center bg-white/20 backdrop-blur-md px-6 py-3 rounded-[30px] border-3 border-white/60 shadow-lg">
+            <div class="flex items-center space-x-2 text-white font-bold text-lg md:text-xl">
+                <span class="text-2xl">📝</span>
+                <span id="txt-progress">ข้อที่: 1/5</span>
+            </div>
+            <div class="flex items-center space-x-2 text-white font-bold text-lg md:text-xl">
+                <span class="text-2xl">🏆</span>
+                <span id="txt-score">คะแนน: 0</span>
+            </div>
+        </div>
+
+        <!-- Central Question Container -->
+        <div class="flex-1 flex flex-col items-center justify-center my-2 max-h-[55vh]">
+            <div class="bg-gradient-to-br from-amber-300 to-pink-400 px-8 py-6 md:py-8 rounded-[35px] border-4 border-white shadow-2xl text-center transform hover:scale-105 transition-transform">
+                <div id="txt-question" class="text-4xl md:text-6xl font-black text-white drop-shadow-[0_4px_6px_rgba(0,0,0,0.3)] tracking-wider">
+                    12 + 15 = ?
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Options Grid (2x2 Layout, Compact Padding to prevent overflow) -->
+        <div class="w-full max-w-3xl mx-auto grid grid-cols-2 gap-3 md:gap-4 pb-2">
+            <button id="btn-opt-0" class="hand-interact jelly-btn py-3 md:py-4 px-6 bg-yellow-400 text-indigo-950 text-2xl md:text-3xl font-extrabold shadow-lg flex items-center justify-center transition-all">
+                0
+            </button>
+            <button id="btn-opt-1" class="hand-interact jelly-btn py-3 md:py-4 px-6 bg-cyan-400 text-indigo-950 text-2xl md:text-3xl font-extrabold shadow-lg flex items-center justify-center transition-all">
+                0
+            </button>
+            <button id="btn-opt-2" class="hand-interact jelly-btn py-3 md:py-4 px-6 bg-pink-400 text-indigo-950 text-2xl md:text-3xl font-extrabold shadow-lg flex items-center justify-center transition-all">
+                0
+            </button>
+            <button id="btn-opt-3" class="hand-interact jelly-btn py-3 md:py-4 px-6 bg-purple-400 text-indigo-950 text-2xl md:text-3xl font-extrabold shadow-lg flex items-center justify-center transition-all">
+                0
+            </button>
+        </div>
+    </div>
+
+    <div id="screen-result" class="absolute inset-0 z-30 flex flex-col items-center justify-center p-6 text-center bg-black/50 backdrop-blur-md" style="display: none;">
+        <div class="max-w-xl w-full bg-white/15 backdrop-blur-lg p-8 rounded-[40px] border-4 border-white/60 shadow-2xl flex flex-col items-center">
+            <div class="text-7xl md:text-8xl mb-4 animate-bounce">🏆🎉</div>
+            <h1 class="text-4xl md:text-5xl font-black text-amber-300 drop-shadow-[0_4px_8px_rgba(0,0,0,0.6)] mb-2">
+                ยอดเยี่ยมมากเด็กๆ!
+            </h1>
+            <p id="txt-final-score" class="text-2xl md:text-3xl text-white font-bold mb-6 drop-shadow">
+                คะแนนที่คุณทำได้: 5 / 5
+            </p>
+            <button id="btn-restart" class="hand-interact jelly-btn px-10 py-5 bg-gradient-to-r from-emerald-400 to-cyan-500 text-white text-2xl md:text-3xl font-bold tracking-wide hover:brightness-110 cursor-pointer shadow-xl">
+                🔄 เล่นใหม่อีกครั้ง
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Game State Variables
+        let currentScreen = 'loading'; // loading, start, game, result
+        let score = 0;
+        let currentQuestionIndex = 0;
+        let totalQuestionsPerRound = 5;
+        let questionPool = [];
+        let currentRoundQuestions = [];
+        let currentActiveQuestion = null;
+
+        // AR & Interaction Variables
+        let pointerX = window.innerWidth / 2;
+        let pointerY = window.innerHeight / 2;
+        let hoveredElement = null;
+        let hoverStartTime = 0;
+        const HOVER_DURATION = 1200; // 1.2 seconds hover to click
+
+        // DOM Element Cache
+        const screenLoading = document.getElementById('screen-loading');
+        const screenStart = document.getElementById('screen-start');
+        const screenGame = document.getElementById('screen-game');
+        const screenResult = document.getElementById('screen-result');
+        const btnStart = document.getElementById('btn-start');
+        const btnRestart = document.getElementById('btn-restart');
+        const arPointer = document.getElementById('ar-pointer');
+        const progressRingPath = document.getElementById('progress-ring-path');
+        const txtProgress = document.getElementById('txt-progress');
+        const txtScore = document.getElementById('txt-score');
+        const txtQuestion = document.getElementById('txt-question');
+        const txtFinalScore = document.getElementById('txt-final-score');
+        const optButtons = [
+            document.getElementById('btn-opt-0'),
+            document.getElementById('btn-opt-1'),
+            document.getElementById('btn-opt-2'),
+            document.getElementById('btn-opt-3')
+        ];
+
+        // Audio Engine using Tone.js with strict try-catch protection
+        let audioInitialized = false;
+        function initAudio() {
+            try {
+                if (!audioInitialized) {
+                    Tone.start();
+                    audioInitialized = true;
+                }
+            } catch (e) {
+                console.warn("Audio initialization error:", e);
+            }
+        }
+
+        function playSound(type) {
+            try {
+                if (!audioInitialized) return;
+                const synth = new Tone.Synth().toDestination();
+                const now = Tone.now();
+
+                if (type === 'hover') {
+                    synth.triggerAttackRelease("C6", "32n", now);
+                } else if (type === 'correct') {
+                    const poly = new Tone.PolySynth(Tone.Synth).toDestination();
+                    poly.triggerAttackRelease(["C4", "E4", "G4", "C5"], "8n", now);
+                } else if (type === 'wrong') {
+                    synth.triggerAttackRelease("G2", "4n", now);
+                } else if (type === 'win') {
+                    const notes = ["C4", "E4", "G4", "B4", "C5"];
+                    notes.forEach((note, idx) => {
+                        synth.triggerAttackRelease(note, "8n", now + idx * 0.15);
+                    });
+                }
+            } catch (e) {
+                console.warn("Audio playback error:", e);
+            }
+        }
+
+        // Generate 50 Unique Math Questions Pool
+        function generateQuestionPool() {
+            const pool = [];
+            const operations = ['+', '-', '*'];
+
+            while (pool.length < 50) {
+                const op = operations[Math.floor(Math.random() * operations.length)];
+                let a, b, ans;
+
+                if (op === '+') {
+                    a = Math.floor(Math.random() * 40) + 1;
+                    b = Math.floor(Math.random() * 40) + 1;
+                    ans = a + b;
+                } else if (op === '-') {
+                    a = Math.floor(Math.random() * 40) + 10;
+                    b = Math.floor(Math.random() * a) + 1; // Ensure non-negative
+                    ans = a - b;
+                } else {
+                    a = Math.floor(Math.random() * 12) + 1;
+                    b = Math.floor(Math.random() * 12) + 1;
+                    ans = a * b;
+                }
+
+                const questionStr = `${a} ${op === '*' ? '×' : op} ${b}`;
+                
+                // Avoid duplicates
+                if (!pool.some(q => q.q === questionStr)) {
+                    let options = [ans];
+                    while (options.length < 4) {
+                        let offset = (Math.floor(Math.random() * 10) + 1) * (Math.random() < 0.5 ? 1 : -1);
+                        let wrongAns = ans + offset;
+                        if (wrongAns >= 0 && !options.includes(wrongAns)) {
+                            options.push(wrongAns);
+                        }
+                    }
+                    options.sort(() => Math.random() - 0.5);
+
+                    pool.push({
+                        q: questionStr,
+                        ans: ans,
+                        options: options
+                    });
+                }
+            }
+            return pool;
+        }
+
+        // Screen State Management
+        function switchScreen(screenName) {
+            currentScreen = screenName;
+            screenLoading.style.display = 'none';
+            screenStart.style.display = 'none';
+            screenGame.style.display = 'none';
+            screenResult.style.display = 'none';
+
+            if (screenName === 'loading') screenLoading.style.display = 'flex';
+            else if (screenName === 'start') screenStart.style.display = 'flex';
+            else if (screenName === 'game') screenGame.style.display = 'flex';
+            else if (screenName === 'result') screenResult.style.display = 'flex';
+        }
+
+        // Start Game Flow
+        function startGame() {
+            initAudio();
+            score = 0;
+            currentQuestionIndex = 0;
+            const shuffledPool = [...questionPool].sort(() => Math.random() - 0.5);
+            currentRoundQuestions = shuffledPool.slice(0, totalQuestionsPerRound);
+            switchScreen('game');
+            loadQuestion();
+        }
+
+        function loadQuestion() {
+            if (currentQuestionIndex >= totalQuestionsPerRound) {
+                endGame();
+                return;
+            }
+
+            currentActiveQuestion = currentRoundQuestions[currentQuestionIndex];
+            txtProgress.innerText = `ข้อที่: ${currentQuestionIndex + 1}/${totalQuestionsPerRound}`;
+            txtScore.innerText = `คะแนน: ${score}`;
+            txtQuestion.innerText = `${currentActiveQuestion.q} = ?`;
+
+            optButtons.forEach((btn, idx) => {
+                btn.innerText = currentActiveQuestion.options[idx];
+                btn.classList.remove('animate-pop', 'animate-shake');
+                btn.style.backgroundColor = '';
+            });
+        }
+
+        function answerQuestion(selectedAnswer, buttonElement) {
+            const isCorrect = (selectedAnswer === currentActiveQuestion.ans);
+
+            if (isCorrect) {
+                score += 10;
+                playSound('correct');
+                buttonElement.classList.add('animate-pop');
+                createSparkles(buttonElement);
+            } else {
+                playSound('wrong');
+                buttonElement.classList.add('animate-shake');
+            }
+
+            setTimeout(() => {
+                currentQuestionIndex++;
+                loadQuestion();
+            }, 800);
+        }
+
+        function endGame() {
+            playSound('win');
+            txtFinalScore.innerText = `คะแนนรวมทั้งหมด: ${score} คะแนน`;
+            switchScreen('result');
+            triggerConfettiRain();
+        }
+
+        // Confetti effect on win
+        function triggerConfettiRain() {
+            const emojis = ['🎉', '⭐', '🎈', '💖', '🌟', '🍬'];
+            for (let i = 0; i < 40; i++) {
+                const confetti = document.createElement('div');
+                confetti.className = 'confetti';
+                confetti.innerText = emojis[Math.floor(Math.random() * emojis.length)];
+                confetti.style.left = Math.random() * 100 + 'vw';
+                confetti.style.top = '-50px';
+                confetti.style.animationDuration = (Math.random() * 2 + 2) + 's';
+                confetti.style.animationDelay = (Math.random() * 1.5) + 's';
+                document.body.appendChild(confetti);
+
+                setTimeout(() => confetti.remove(), 4000);
+            }
+        }
+
+        // Sparkle effect on correct answer
+        function createSparkles(element) {
+            const rect = element.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            for (let i = 0; i < 8; i++) {
+                const sparkle = document.createElement('div');
+                sparkle.className = 'sparkle text-2xl';
+                sparkle.innerText = '✨';
+                sparkle.style.left = centerX + 'px';
+                sparkle.style.top = centerY + 'px';
+                
+                const angle = (i / 8) * Math.PI * 2;
+                const distance = 60 + Math.random() * 40;
+                sparkle.style.setProperty('--dx', `${Math.cos(angle) * distance}px`);
+                sparkle.style.setProperty('--dy', `${Math.sin(angle) * distance}px`);
+
+                document.body.appendChild(sparkle);
+                setTimeout(() => sparkle.remove(), 600);
+            }
+        }
+
+        // MediaPipe Hands Integration & Hover-to-Click Raycasting
+        function initMediaPipe() {
+            const videoElement = document.getElementById('webcam');
+            const canvasElement = document.getElementById('output-canvas');
+            const canvasCtx = canvasElement.getContext('2d');
+
+            function resizeCanvas() {
+                canvasElement.width = window.innerWidth;
+                canvasElement.height = window.innerHeight;
+            }
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.6
+            });
+
+            hands.onResults((results) => {
+                canvasCtx.save();
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const landmarks = results.multiHandLandmarks[0];
+                    
+                    // Draw Skeleton & landmarks safely using MediaPipe drawing_utils
+                    if (typeof drawConnectors !== 'undefined' && typeof drawLandmarks !== 'undefined') {
+                        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#ffffff50', lineWidth: 4});
+                        drawLandmarks(canvasCtx, landmarks, {color: '#f43f5e', lineWidth: 2, radius: 4});
+                    }
+
+                    // Index Finger Tip is Landmark #8
+                    const indexTip = landmarks[8];
+                    
+                    const rawX = (1 - indexTip.x) * window.innerWidth;
+                    const rawY = indexTip.y * window.innerHeight;
+
+                    pointerX += (rawX - pointerX) * 0.4;
+                    pointerY += (rawY - pointerY) * 0.4;
+
+                    arPointer.style.display = 'flex';
+                    arPointer.style.left = `${pointerX}px`;
+                    arPointer.style.top = `${pointerY}px`;
+
+                    checkInteractiveHover(pointerX, pointerY);
+                } else {
+                    arPointer.style.display = 'none';
+                    resetHoverState();
+                }
+
+                canvasCtx.restore();
+            });
+
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 1280,
+                height: 720
+            });
+
+            camera.start()
+                .then(() => {
+                    questionPool = generateQuestionPool();
+                    switchScreen('start');
+                })
+                .catch((err) => {
+                    console.error("Camera access error:", err);
+                    screenLoading.innerHTML = `
+                        <div class="text-6xl mb-4">📷❌</div>
+                        <h2 class="text-2xl font-bold text-red-400 mb-2">ไม่สามารถเปิดใช้งานกล้องได้</h2>
+                        <p class="text-gray-300">โปรดตรวจสอบการอนุญาตใช้งานกล้องในเบราว์เซอร์ของคุณแล้วรีเฟรชหน้าใหม่อีกครั้ง</p>
+                    `;
+                });
+        }
+
+        // Hover-to-Click detection logic
+        function checkInteractiveHover(x, y) {
+            if (currentScreen !== 'game') {
+                const activeButtons = document.querySelectorAll('.hand-interact');
+                let foundHover = false;
+                
+                activeButtons.forEach(btn => {
+                    const rect = btn.getBoundingClientRect();
+                    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                        foundHover = true;
+                        if (hoveredElement !== btn) {
+                            if (hoveredElement) hoveredElement.classList.remove('ar-hovered');
+                            hoveredElement = btn;
+                            hoverStartTime = Date.now();
+                            playSound('hover');
+                        } else {
+                            const elapsed = Date.now() - hoverStartTime;
+                            const progress = Math.min(100, (elapsed / HOVER_DURATION) * 100);
+                            progressRingPath.style.strokeDasharray = `${progress}, 100`;
+
+                            if (elapsed >= HOVER_DURATION) {
+                                btn.click();
+                                resetHoverState();
+                            }
+                        }
+                    }
+                });
+
+                if (!foundHover) {
+                    resetHoverState();
+                }
+                return;
+            }
+
+            let foundHover = false;
+            optButtons.forEach(btn => {
+                const rect = btn.getBoundingClientRect();
+                if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                    foundHover = true;
+                    if (hoveredElement !== btn) {
+                        if (hoveredElement) hoveredElement.classList.remove('ar-hovered');
+                        hoveredElement = btn;
+                        hoverStartTime = Date.now();
+                        playSound('hover');
+                    } else {
+                        const elapsed = Date.now() - hoverStartTime;
+                        const progress = Math.min(100, (elapsed / HOVER_DURATION) * 100);
+                        progressRingPath.style.strokeDasharray = `${progress}, 100`;
+                        btn.classList.add('ar-hovered');
+
+                        if (elapsed >= HOVER_DURATION) {
+                            const selectedVal = parseInt(btn.innerText);
+                            answerQuestion(selectedVal, btn);
+                            resetHoverState();
+                        }
+                    }
+                }
+            });
+
+            if (!foundHover) {
+                resetHoverState();
+            }
+        }
+
+        function resetHoverState() {
+            if (hoveredElement) {
+                hoveredElement.classList.remove('ar-hovered');
+                hoveredElement = null;
+            }
+            hoverStartTime = 0;
+            progressRingPath.style.strokeDasharray = '0, 100';
+        }
+
+        // Event Listeners for standard click/touch fallback
+        btnStart.addEventListener('click', () => {
+            initAudio();
+            startGame();
+        });
+
+        btnRestart.addEventListener('click', () => {
+            initAudio();
+            startGame();
+        });
+
+        optButtons.forEach((btn, idx) => {
+            btn.addEventListener('click', () => {
+                if (currentScreen === 'game' && currentActiveQuestion) {
+                    const selectedVal = parseInt(btn.innerText);
+                    answerQuestion(selectedVal, btn);
+                }
+            });
+        });
+
+        // Initialize App on Window Load
+        window.onload = function() {
+            initMediaPipe();
+        };
+    </script>
+</body>
+</html>
